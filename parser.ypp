@@ -1,0 +1,349 @@
+%{
+#include <iostream>
+#include <string>
+#include "hw3_output.hpp"
+#include "tokens.hpp"
+#include "symbol_table.hpp"
+using namespace std;
+using namespace output;
+int yylex();
+int yyerror(const char * message);
+
+
+
+symbol_table symbolTable;
+%}
+
+%code top {
+   #include "symbol_table.hpp"
+}
+
+%nonassoc VOID
+%nonassoc INT
+%nonassoc BYTE
+%nonassoc B
+%nonassoc BOOL
+%nonassoc TRUE
+%nonassoc FALSE
+%nonassoc RETURN
+%nonassoc IF
+%nonassoc WHILE
+%nonassoc BREAK
+%nonassoc CONTINUE
+%nonassoc SC
+%nonassoc COMMA
+%nonassoc ID
+%nonassoc NUM
+%nonassoc STRING
+%nonassoc AUTO
+
+%right ASSIGN
+%right ELSE
+%left OR
+%left AND
+%left EQOP NEOP
+%left GEOP GTOP LEOP LTOP
+%left SUBOP ADDOP
+%left MULOP DIVOP
+%right NOT
+%left LBRACE
+%left LPAREN
+%left RBRACE
+%left RPAREN
+
+
+%nonassoc SECOND_PR;
+%nonassoc FIRST_PR;
+%%
+Program:    	         Funcs                                           {};
+
+Funcs:	               %empty %prec SECOND_PR                          {};
+
+Funcs:	               FuncDecl Funcs %prec FIRST_PR                   {};
+
+FuncDecl:	            RetType ID LPAREN Formals                       {
+                                                                        vector<shared_ptr<symbolId>> vec = (dynamic_pointer_cast<SymbolType<vector<shared_ptr<symbolId>>>>($4)->getValue());
+                                                                        symbolFunc::startSymbolFuncWithDomain((dynamic_pointer_cast<SymbolType<string>>($2)->getValue()),(dynamic_pointer_cast<symbolReturn>($1)), vec);
+                                                                        }
+                        RPAREN LBRACE Statements RBRACE
+                                                                        {
+                                                                        symbolFunc::endSymbolFuncDomain();
+                                                                        };
+
+RetType:	               Type                                            {
+                                                                        $$ = $1;
+                                                                        };
+
+RetType:	               VOID                                            {
+                                                                        $$ = (shared_ptr<symbolReturn>(new symbolReturn ("VOID")));
+                                                                        };
+
+Formals:	               %empty               	                        {
+                                                                        $$ = (shared_ptr<SymbolType<vector<shared_ptr<symbolId>>>>(new SymbolType<vector<shared_ptr<symbolId>>>(vector<shared_ptr<symbolId>>())));
+                                                                        };
+
+Formals:	               FormalsList                                     {
+                                                                        $$ = $1;
+                                                                        };
+
+FormalsList:	         FormalDecl                                      {
+                                                                        $$ = (shared_ptr<SymbolType<vector<shared_ptr<symbolId>>>>(new SymbolType<vector<shared_ptr<symbolId>>>(vector<shared_ptr<symbolId>>((vector<shared_ptr<symbolId> >) {(dynamic_pointer_cast<symbolId>($1))}))));
+                                                                        };
+
+FormalsList:	         FormalDecl COMMA FormalsList                    {
+                                                                        (dynamic_pointer_cast<SymbolType<vector<shared_ptr<symbolId>>>>(($$ = $3))->getValue()).push_back((dynamic_pointer_cast<symbolId>($1)));
+                                                                        };
+
+TypeDeclare:            Type ID                                         {
+                                                                        $$ = (shared_ptr<symbolId>(new symbolId ((dynamic_pointer_cast<SymbolType<string>>($2)->getValue()), (dynamic_pointer_cast<symbolVar>($1))->getTypeName())));
+                                                                        }
+
+FormalDecl:	            TypeDeclare                                     {
+                                                                        $$ = $1;
+                                                                        };
+
+Statements:	            Statement                                       {};
+
+Statements:	            Statements Statement                            {};
+
+Statement:	            LBRACE AddDomain Statements RBRACE RemoveDomain {};
+
+Statement:	            TypeDeclare SC                                  {
+                                                                        addUninitializedSymbol(symbolTable, $1);
+                                                                        };
+
+Statement:              TypeDeclare ASSIGN ExpOrFinScBool SC            {
+                                                                        tryinsertSymbolWithExp(symbolTable, $1, $3);
+                                                                        };
+
+Statement:              AUTO ID ASSIGN ExpOrFinScBool SC                {
+                                                                        addAutoSymbolWithExp(symbolTable, $2, $4);
+                                                                        };
+
+Statement:              ID ASSIGN ExpOrFinScBool SC                     {
+                                                                        tryAssignExp(symbolTable, $1, $3);
+                                                                        };
+
+Statement:	            Call SC                                         {};
+
+Statement:	            RETURN SC                                       {
+                                                                        handleReturn(symbolTable.retType);
+                                                                        };
+
+Statement:	            RETURN ExpOrFinScBool SC                        {
+                                                                        handleReturnExp(symbolTable.retType, $2);
+                                                                        };
+
+Statement:	            IF LPAREN CondBoolExp RPAREN AddDomain IfStart Statement RemoveDomain %prec IF
+                                                                        {
+                                                                        handleIfEnd($3);
+                                                                        };
+
+Statement:	            IF LPAREN CondBoolExp RPAREN AddDomain IfStart Statement RemoveDomain ELSE {$$ = handleIfEnd($3, true);} AddDomain Statement RemoveDomain
+                                                                        {
+                                                                        handleElseEnd($10);
+                                                                        };
+
+Statement:	            WHILE LPAREN Label CondBoolExp RPAREN           {
+                                                                        handleWhileStart($4, (dynamic_pointer_cast<SymbolType<string>>($3)->getValue()));
+                                                                        }
+                        AddDomain Statement RemoveDomain %prec WHILE    {
+                                                                        handleWhileEnd($4);
+                                                                        };
+
+Statement:	            BREAK SC                                        {
+                                                                        symbolTable.addBreak();
+                                                                        };
+
+Statement:	            CONTINUE SC                                     {
+                                                                        symbolTable.addContinue();
+                                                                        };
+
+IfStart:                %empty                                          {
+                                                                        $$ = getLastScBool();
+                                                                        handleIfStart($$);
+                                                                        };
+
+CondBoolExp:            AssureScFromBool                                {
+                                                                        $$ = saveScBool($1);
+                                                                        };
+
+AssureScFromBool:       Exp                                             {
+                                                                        $$ = (shared_ptr<ShortCircuitBool>(new ShortCircuitBool (assureSymbolExp($1))));
+                                                                        };
+
+AssureScFromBool:       ScBoolExp                                       {
+                                                                        $$ = assureScBool($1);
+                                                                        };
+
+AddDomain:	            %empty                                          {
+                                                                        symbolTable.addDomain();
+                                                                        };
+
+RemoveDomain:           %empty                                          {
+                                                                        symbolTable.removeDomain();
+                                                                        };
+
+Call:                   ID LPAREN ExpList RPAREN                        {
+                                                                        $$ = symbolExp::getCallResult(symbolTable.getFuncSymbol((dynamic_pointer_cast<SymbolType<string>>($1)->getValue())), $3);
+                                                                        }
+
+Call:	                  ID LPAREN RPAREN                                {
+                                                                        $$ = symbolExp::getCallResult(symbolTable.getFuncSymbol((dynamic_pointer_cast<SymbolType<string>>($1)->getValue())),
+                                                                        (std::shared_ptr<SymbolType<vector<shared_ptr<symbolExp>>>>(new SymbolType<vector<shared_ptr<symbolExp>>>(vector<shared_ptr<symbolExp>>()))));
+                                                                        }
+ExpList:	               ExpOrFinScBool                                  {
+                                                                        $$ = handleExpList($1, nullptr);
+                                                                        };
+
+ExpList:	               ExpOrFinScBool COMMA ExpList                    {
+                                                                        $$ = handleExpList($1, $3);
+                                                                        };
+
+Type:	                  INT                                             {
+                                                                        $$ = (shared_ptr<symbolVar>(new symbolVar ("INT")));
+                                                                        };
+
+Type:	                  BYTE	                                          {
+                                                                        $$ = (shared_ptr<symbolVar>(new symbolVar ("BYTE")));
+                                                                        };
+
+Type:	                  BOOL                                            {
+                                                                        $$ = (shared_ptr<symbolVar>(new symbolVar ("BOOL")));
+                                                                        };
+
+ExpOrFinScBool:         FinScBool %prec SECOND_PR                       {
+                                                                        $$ = $1;
+                                                                        };
+
+ExpOrFinScBool:         Exp %prec FIRST_PR                              {
+                                                                        $$ = $1;
+                                                                        };
+
+FinScBool:              ScBoolExp                                       {
+                                                                        $$ = assureScBool($1)->finallizeTosymbolExp();
+                                                                        };
+
+
+Exp:	                  Exp IF LPAREN CondBoolExp RPAREN IfStart 
+                        {$$ = handleIfEnd($4, true);} ELSE Exp
+                                                                        {
+                                                                        auto Exp1 = (dynamic_pointer_cast<symbolExp>($1))->getType();
+                                                                        auto Exp9 = (dynamic_pointer_cast<symbolExp>($9))->getType();
+                                                                        if (!(Exp1 == Exp9)) {
+                                                                           if (not castingAllow($1, $9))
+                                                                           {
+                                                                              errorMismatch(yylineno);
+                                                                           }
+                                                                        }
+                                                                        handleElseEnd($7);
+                                                                        };
+
+Exp:	                  LPAREN Exp RPAREN                               {
+                                                                        $$ = $2;
+                                                                        };
+
+Exp:                    Exp ADDOP Exp                                   {
+                                                                        $$ = symbolExp::getBinOpResult($1, $3, ADDOP);
+                                                                        };
+
+Exp:                    Exp SUBOP Exp                                   {
+                                                                        $$ = symbolExp::getBinOpResult($1, $3, SUBOP);
+                                                                        };
+
+Exp:                    Exp MULOP Exp                                   {
+                                                                        $$ = symbolExp::getBinOpResult($1, $3, MULOP);
+                                                                        };
+
+Exp:                    Exp DIVOP Exp                                   {
+                                                                        $$ = symbolExp::getBinOpResult($1, $3, DIVOP);
+                                                                        };
+
+Exp:	                  ID                                              {
+                                                                        $$ = symbolExp::loadIdValue(symbolTable.getVarSymbol((dynamic_pointer_cast<SymbolType<string>>($1)->getValue())), symbolTable.pRegisterStackVar);
+                                                                        };
+
+Exp:	                  Call                                            {
+                                                                        $$ = $1 != nullptr ? $1: throw "Can't derive Call from Exp for void functions";
+                                                                        };
+
+Exp:	                  NUM                                             {
+                                                                        $$ = (shared_ptr<symbolExp>(new symbolExp ("INT", (dynamic_pointer_cast<SymbolType<string>>($1)->getValue()))));
+                                                                        };
+
+Exp:	                  NUM B                                           {
+                                                                        $$ = (shared_ptr<symbolExp>(new symbolExp ("BYTE", (dynamic_pointer_cast<SymbolType<string>>($1)->getValue()))));
+                                                                        };
+
+Exp:	                  STRING                                          {
+                                                                        $$ = symbolExp::loadStringLiteralAddr((dynamic_pointer_cast<SymbolType<string>>($1)->getValue()));
+                                                                        };
+
+Exp:	                  TRUE                                            {
+                                                                        $$ = (shared_ptr<symbolExp>(new symbolExp ("BOOL", "true")));
+                                                                        };
+
+Exp:	                  FALSE                                           {
+                                                                        $$ = (shared_ptr<symbolExp>(new symbolExp ("BOOL", "false")));
+                                                                        };
+
+ScBoolExp:              NOT AssureScFromBool                            {
+                                                                        $$ = assureScBool($2)->evalBool(nullptr, nullptr, NOT);
+                                                                        };
+
+ScBoolExp:              AssureScFromBool AND Label AssureScFromBool     {
+                                                                        $$ = assureScBool($1)->evalBool($4, $3, AND);
+                                                                        };
+
+ScBoolExp:              AssureScFromBool OR Label AssureScFromBool      {
+                                                                        $$ = assureScBool($1)->evalBool($4, $3, OR);
+                                                                        };
+
+ScBoolExp:              LPAREN ScBoolExp RPAREN                         {
+                                                                        $$ = $2;
+                                                                        };
+
+Exp:                    Exp GEOP Exp                                    {
+                                                                        $$ = symbolExp::getCmpResult($1, $3, GEOP);
+                                                                        };
+
+Exp:                    Exp GTOP Exp                                    {
+                                                                        $$ = symbolExp::getCmpResult($1, $3, GTOP);
+                                                                        };
+
+Exp:                    Exp LEOP Exp                                    {
+                                                                        $$ = symbolExp::getCmpResult($1, $3, LEOP);
+                                                                        };
+
+Exp:                    Exp LTOP Exp                                    {
+                                                                        $$ = symbolExp::getCmpResult($1, $3, LTOP);
+                                                                        };
+
+Exp:                    Exp EQOP Exp                                    {
+                                                                        $$ = symbolExp::getCmpResult($1, $3, EQOP);
+                                                                        };
+
+Exp:                    Exp NEOP Exp                                    {
+                                                                        $$ = symbolExp::getCmpResult($1, $3, NEOP);
+                                                                        };
+
+Exp:                    LPAREN Type RPAREN Exp                          {
+                                                                        auto var = (dynamic_pointer_cast<symbolVar>($2))->getTypeName();
+                                                                        auto exp_type = dynamic_pointer_cast<symbolExp>($4)->getRegOrImmResult();
+                                                                        $$ = symbolExp::getCastResult($2, $4);
+                                                                        };
+
+Label:                  %empty                                          {
+                                                                        $$ = (shared_ptr<SymbolType<string>>(new SymbolType<string>(string (CodeBuffer::instance().genLabel("BoolBinOpRight")))));
+                                                                        };
+
+%%
+int main() {
+
+   auto &buffer = CodeBuffer::instance();
+	yyparse();
+   buffer.printGlobalBuffer();
+   buffer.printCodeBuffer();
+   verifyMainExists(symbolTable);
+   return 0;
+}
